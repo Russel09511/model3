@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Enhanced Currency Recognition</title>
+  
+  <!-- Load TensorFlow.js first -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.0.0"></script>
+  
+  <!-- Load Teachable Machine Image library -->
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8.4/dist/teachablemachine-image.min.js"></script>
+  
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f4f4f4;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    #status {
+      font-size: 20px;
+      margin-top: 20px;
+      padding: 10px;
+      border-radius: 5px;
+      background-color: #e7e7e7;
+      min-width: 300px;
+      text-align: center;
+    }
+    
+    #predictionResult {
+      margin-top: 20px;
+      font-size: 18px;
+      padding: 15px;
+      border-radius: 5px;
+      background-color: #f0f0f0;
+      min-width: 300px;
+      text-align: center;
+    }
+    
+    .prediction-details {
+      margin-top: 10px;
+      text-align: left;
+      font-size: 14px;
+    }
+    
+    .log-container {
+      margin-top: 20px;
+      border: 1px solid #ccc;
+      padding: 10px;
+      width: 80%;
+      max-width: 600px;
+      height: 200px;
+      overflow-y: auto;
+      background-color: #f9f9f9;
+      font-family: monospace;
+      font-size: 14px;
+    }
+    
+    .log-entry {
+      margin: 5px 0;
+      padding: 3px;
+      border-bottom: 1px solid #eee;
+    }
+    
+    .debug-buttons {
+      margin-top: 20px;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    
+    .debug-button {
+      padding: 10px 15px;
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    
+    .debug-button.blue {
+      background-color: #2196F3;
+    }
+    
+    .debug-button.red {
+      background-color: #f44336;
+    }
+    
+    .success {
+      background-color: #4CAF50;
+      color: white;
+    }
+    
+    .warning {
+      background-color: #ff9800;
+      color: white;
+    }
+    
+    .error {
+      background-color: #f44336;
+      color: white;
+    }
+    
+    #preview {
+      margin-top: 20px;
+      max-width: 224px;
+      max-height: 224px;
+      border: 2px solid #ccc;
+      display: none;
+    }
+    
+    #imageContainer {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin-top: 20px;
+    }
+    
+    .file-input-container {
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Enhanced Currency Recognition</h1>
+  <p id="status" class="warning">Loading model...</p>
+  
+  <div id="imageContainer">
+    <img id="preview" alt="Preview">
+  </div>
+  
+  <div id="predictionResult">No prediction yet</div>
+  
+  <div class="file-input-container">
+    <input type="file" id="imageUpload" accept="image/*" />
+    <p><small>Upload image to test locally</small></p>
+  </div>
+  
+  <div class="debug-buttons">
+    <button class="debug-button" onclick="testModelLoaded()">Test Model</button>
+    <button class="debug-button blue" onclick="testClass1()">Test Class 100 pesos</button>
+    <button class="debug-button blue" onclick="testClass2()">Test Class 500 pesos</button>
+    <button class="debug-button red" onclick="clearLogs()">Clear Logs</button>
+  </div>
+  
+  <div class="log-container" id="logs">
+    <div class="log-entry">Server starting. Environment: <span id="environment">checking...</span></div>
+  </div>
+  
+  <script>
+    // Global variables
+    let model;
+    let isModelLoaded = false;
+    let modelClasses = [];
+    let isRunningInReactNative = false;
+    
+    // Check if running in React Native WebView
+    function checkEnvironment() {
+      isRunningInReactNative = window.ReactNativeWebView !== undefined;
+      document.getElementById('environment').textContent = 
+        isRunningInReactNative ? 'React Native WebView' : 'Browser';
+      
+      log(`Running in ${isRunningInReactNative ? 'React Native WebView' : 'Browser'}`);
+      
+      // Hide file input if in React Native
+      if (isRunningInReactNative) {
+        document.querySelector('.file-input-container').style.display = 'none';
+      }
+    }
+    
+    // Logging function
+    function log(message, isError = false) {
+      const logsElement = document.getElementById('logs');
+      const logEntry = document.createElement('div');
+      logEntry.className = 'log-entry' + (isError ? ' error' : '');
+      logEntry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+      logsElement.appendChild(logEntry);
+      logsElement.scrollTop = logsElement.scrollHeight;
+      console.log(message);
+    }
+    
+    function clearLogs() {
+      document.getElementById('logs').innerHTML = '';
+      log('Logs cleared');
+    }
+    
+    // Update status with styling
+    function updateStatus(message, type = 'normal') {
+      const statusElement = document.getElementById('status');
+      statusElement.textContent = message;
+      
+      // Remove all classes
+      statusElement.classList.remove('success', 'warning', 'error');
+      
+      // Add appropriate class
+      if (type === 'success') {
+        statusElement.classList.add('success');
+      } else if (type === 'warning') {
+        statusElement.classList.add('warning');
+      } else if (type === 'error') {
+        statusElement.classList.add('error');
+      }
+    }
+    
+    // Test if model is loaded
+    function testModelLoaded() {
+      if (isModelLoaded) {
+        updateStatus('✅ Model is loaded and ready', 'success');
+        log('Model test: Passed');
+        log(`Available classes: ${modelClasses.join(', ')}`);
+      } else {
+        updateStatus('❌ Model is NOT loaded', 'error');
+        log('Model test: Failed', true);
+        retryLoadModel();
+      }
+    }
+    
+    // Retry loading the model
+    function retryLoadModel() {
+      log('Retrying model load...');
+      init();
+    }
+    
+    // Test functions for specific classes
+    async function testClass1() {
+      if (!isModelLoaded) {
+        log('Model not loaded, cannot test', true);
+        return;
+      }
+      
+      // Create a simple canvas with "100" text
+      const canvas = document.createElement('canvas');
+      canvas.width = 224;
+      canvas.height = 224;
+      const ctx = canvas.getContext('2d');
+      
+      // Green background (similar to 100 peso note)
+      ctx.fillStyle = '#4d8c57';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      // Text "100"
+      ctx.font = 'bold 80px Arial';
+      ctx.fillStyle = 'white';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('100', canvas.width/2, canvas.height/2);
+      
+      // Convert to image and predict
+      const dataURL = canvas.toDataURL('image/png');
+      handleBase64Image(dataURL);
+    }
+    
+    async function testClass2() {
+      if (!isModelLoaded) {
+        log('Model not loaded, cannot test', true);
+        return;
+      }
+      
+      // Create a simple canvas with "500" text
+      const canvas = document.createElement('canvas');
+      canvas.width = 224;
+      canvas.height = 224;
+      const ctx = canvas.getContext('2d');
+      
+      // Purple/blue background (similar to 500 peso note)
+      ctx.fillStyle = '#6a4199';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      // Text "500"
+      ctx.font = 'bold 80px Arial';
+      ctx.fillStyle = 'yellow';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('500', canvas.width/2, canvas.height/2);
+      
+      // Convert to image and predict
+      const dataURL = canvas.toDataURL('image/png');
+      handleBase64Image(dataURL);
+    }
+    
+    // Load the model
+    async function init() {
+      try {
+        updateStatus('Loading model...', 'warning');
+
+        const modelURL = "model/model.json";
+        const metadataURL = "model/metadata.json";
+        
+        log(`Loading model from: ${modelURL}`);
+        model = await tmImage.load(modelURL, metadataURL);
+        
+        isModelLoaded = true;
+        
+        // Map original class labels to new format if needed
+        const originalClasses = model.getClassLabels();
+        
+        // Transform class names if needed (from "1", "2" to "100 pesos", "500 pesos")
+        modelClasses = originalClasses.map(className => {
+          if (className === "100 pesos") return "100 pesos";
+          if (className === "500 pesos") return "500 pesos";
+          return className; // Keep any other classes as is
+        });
+        
+        log('✅ Model loaded successfully');
+        log(`Original classes: ${originalClasses.join(', ')}`);
+        log(`Mapped classes: ${modelClasses.join(', ')}`);
+        updateStatus('Model loaded. Waiting for image...', 'success');
+        
+        // Send message to React Native if in WebView
+        if (isRunningInReactNative) {
+          window.ReactNativeWebView.postMessage(JSON.stringify({
+            status: 'modelLoaded',
+            message: 'Currency recognition model loaded successfully',
+            classes: modelClasses
+          }));
+          log('✅ Sent modelLoaded message to React Native');
+        }
+      } catch (error) {
+        console.error("Model loading error:", error);
+        log(`❌ Model loading error: ${error}`, true);
+        updateStatus('Failed to load model', 'error');
+        
+        // Send error to React Native if in WebView
+        if (isRunningInReactNative) {
+          window.ReactNativeWebView.postMessage(JSON.stringify({
+            error: 'modelLoadFailed',
+            message: error.toString()
+          }));
+        }
+      }
+    }
+    
+    // Display all predictions for debugging
+    function displayDetailedPredictions(predictions) {
+      const resultDiv = document.getElementById('predictionResult');
+      const top = predictions[0];
+      
+      // Create main result
+      resultDiv.innerHTML = `
+        <div>Predicted: <strong>${top.className}</strong> (${(top.probability * 100).toFixed(2)}%)</div>
+        <div class="prediction-details">
+          <strong>All predictions:</strong>
+          <ul>
+            ${predictions.map(p => 
+              `<li>${p.className}: ${(p.probability * 100).toFixed(2)}%</li>`
+            ).join('')}
+          </ul>
+        </div>
+      `;
+    }
+    
+    // Handle image received from React Native or file input
+    async function handleBase64Image(base64Data) {
+      try {
+        log(`Received image data (${base64Data.length} chars)`);
+        updateStatus('Image received. Predicting...', 'warning');
+        
+        // Show preview of the received image
+        const previewImg = document.getElementById('preview');
+        previewImg.src = base64Data;
+        previewImg.style.display = 'block';
+        
+        // Create an image element and load the base64 data
+        const image = new Image();
+        image.src = base64Data;
+        
+        image.onload = async () => {
+          try {
+            log(`Image loaded: ${image.width}x${image.height}`);
+            updateStatus('Processing image...', 'warning');
+            
+            if (!isModelLoaded) {
+              log('⚠️ Model not loaded yet, attempting to load again...');
+              await init();
+              if (!isModelLoaded) {
+                throw new Error('Model still not loaded');
+              }
+            }
+            
+            // Make the prediction with the original model
+            const originalPredictions = await model.predict(image);
+            
+            // Map the class names to our new format
+            const predictions = originalPredictions.map(p => {
+              let newClassName = p.className;
+              if (p.className === "1") newClassName = "100 pesos";
+              if (p.className === "2") newClassName = "500 pesos";
+              
+              return {
+                className: newClassName,
+                probability: p.probability,
+                originalClass: p.className // Keep the original class for reference
+              };
+            });
+            
+            // Sort by probability
+            predictions.sort((a, b) => b.probability - a.probability);
+            
+            // Log all predictions for debugging
+            predictions.forEach((p, i) => {
+              log(`Class ${i+1}: ${p.className} (${(p.probability * 100).toFixed(2)}%), original: ${p.originalClass}`);
+            });
+            
+            const top = predictions[0];
+            
+            // Display detailed predictions on page
+            displayDetailedPredictions(predictions);
+            
+            // Format result for React Native
+            const result = {
+              className: top.className,
+              probability: top.probability,
+              originalClass: top.originalClass, // Send original class to React Native
+              allPredictions: predictions.map(p => ({
+                className: p.className,
+                probability: p.probability,
+                originalClass: p.originalClass
+              }))
+            };
+            
+            // Update status based on confidence
+            if (result.probability >= 0.95) {
+              updateStatus('✅ High confidence prediction', 'success');
+            } else if (result.probability >= 0.7) {
+              updateStatus('✓ Good confidence prediction', 'success');
+            } else {
+              updateStatus('⚠️ Low confidence prediction', 'warning');
+            }
+            
+            // Send the result back to React Native
+            if (isRunningInReactNative) {
+              window.ReactNativeWebView.postMessage(JSON.stringify(result));
+              log('✅ Sent prediction result to React Native');
+            }
+          } catch (error) {
+            console.error("Prediction error:", error);
+            log(`❌ Prediction error: ${error}`, true);
+            updateStatus('Prediction failed', 'error');
+            
+            // Send error back to React Native
+            if (isRunningInReactNative) {
+              window.ReactNativeWebView.postMessage(JSON.stringify({
+                error: 'predictionFailed',
+                message: error.toString()
+              }));
+            }
+          }
+        };
+        
+        image.onerror = (err) => {
+          console.error("Image loading error:", err);
+          log('❌ Image failed to load', true);
+          updateStatus('Image failed to load', 'error');
+          
+          // Send error back to React Native
+          if (isRunningInReactNative) {
+            window.ReactNativeWebView.postMessage(JSON.stringify({
+              error: 'imageLoadFailed',
+              message: 'Failed to load image'
+            }));
+          }
+        };
+      } catch (error) {
+        console.error("Error processing image:", error);
+        log(`❌ Error processing image: ${error}`, true);
+        updateStatus('Error processing image', 'error');
+        
+        // Send error back to React Native
+        if (isRunningInReactNative) {
+          window.ReactNativeWebView.postMessage(JSON.stringify({
+            error: 'imageProcessFailed',
+            message: error.toString()
+          }));
+        }
+      }
+    }
+    
+    // Handle file upload for testing in browser
+    function setupFileUpload() {
+      const fileInput = document.getElementById('imageUpload');
+      fileInput.addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (file) {
+          const reader = new FileReader();
+          reader.onload = function(event) {
+            handleBase64Image(event.target.result);
+          };
+          reader.readAsDataURL(file);
+        }
+      });
+    }
+    
+    // Make the function global so it can be called directly
+    window.handleBase64Image = handleBase64Image;
+    
+    // Listen for messages (supports both React Native WebView messages and standard postMessage)
+    function setupMessageListeners() {
+      // For direct WebView communication
+      window.addEventListener("message", (event) => {
+        const data = event.data;
+        log(`Message received: ${typeof data === 'string' ? data.substring(0, 50) + '...' : 'non-string data'}`);
+        
+        if (typeof data === 'string') {
+          if (data.startsWith("data:image")) {
+            handleBase64Image(data);
+          } else if (data === "PING") {
+            log("Ping received from React Native");
+            
+            // Send a PONG response for connectivity testing
+            if (isRunningInReactNative) {
+              window.ReactNativeWebView.postMessage(JSON.stringify({
+                status: "PONG",
+                modelStatus: isModelLoaded ? "loaded" : "not_loaded",
+                classes: modelClasses
+              }));
+              log("Pong sent to React Native");
+            }
+          } else {
+            try {
+              // Try to parse as JSON in case it's a command
+              const jsonData = JSON.parse(data);
+              if (jsonData.command === "getStatus") {
+                if (isRunningInReactNative) {
+                  window.ReactNativeWebView.postMessage(JSON.stringify({
+                    status: "statusResponse",
+                    modelLoaded: isModelLoaded,
+                    classes: modelClasses
+                  }));
+                }
+              }
+            } catch (e) {
+              log(`Invalid data received: ${data.substring(0, 50)}...`, true);
+            }
+          }
+        }
+      });
+      
+      log("Message listeners set up");
+    }
+    
+    // Signal that the page is ready
+    function pageReadySignal() {
+      log("Page is ready");
+      
+      if (isRunningInReactNative) {
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          status: "pageReady"
+        }));
+        log("Sent pageReady message to React Native");
+      }
+    }
+    
+    // Initialize everything
+    document.addEventListener("DOMContentLoaded", function() {
+      log("DOM fully loaded");
+      checkEnvironment();
+      setupFileUpload();
+      pageReadySignal();
+    });
+    
+    // Start the model loading process and setup listeners
+    setupMessageListeners();
+    init();
+    
+    // Notify when the script has loaded completely
+    log("Script loaded successfully");
+  </script>
+</body>
+</html>
